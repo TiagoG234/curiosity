@@ -1,0 +1,491 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================
+// USER & AUTH
+// ============================================
+
+model User {
+  id                    String                @id @default(cuid())
+  email                 String                @unique
+  emailVerified         DateTime?
+  name                  String?
+  image                 String?
+  hashedPassword        String?
+
+  // Preferences
+  notificationFrequency NotificationFrequency @default(WEEKLY)
+  timezone              String                @default("UTC")
+  obsidianVaultPath     String?
+  theme                 Theme                 @default(LIGHT)
+
+  // Relations
+  accounts              Account[]
+  sessions              Session[]
+  topics                Topic[]
+  resources             Resource[]
+  completions           Completion[]
+  reflections           Reflection[]
+  concepts              Concept[]
+  tags                  Tag[]
+  notifications         Notification[]
+  focusSessions         FocusSession[]
+  substackPosts         SubstackPost[]
+
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  @@index([email])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============================================
+// CORE MODELS - ATOMIC & MODULAR
+// ============================================
+
+model Topic {
+  id                String      @id @default(cuid())
+  userId            String
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Basic Info
+  title             String
+  description       String?     @db.Text
+  slug              String
+
+  // Status & Temperature (independent per topic)
+  status            TopicStatus @default(ACTIVE)
+  temperature       Temperature @default(WARM)
+
+  // Metadata
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  interestStartDate DateTime    @default(now())
+  satisfiedAt       DateTime?
+  shelvedAt         DateTime?
+  deletedAt         DateTime?
+  lastActivityAt    DateTime    @default(now())
+
+  // Context
+  whyInterested     String?     @db.Text
+  initialQuestions  String[]
+
+  // Tier Progress (lightweight tracking)
+  gatewayComplete      Boolean   @default(false)
+  gatewayDecidedAt     DateTime?
+  intermediateStarted  Boolean   @default(false)
+  intermediateComplete Boolean   @default(false)
+  advancedStarted      Boolean   @default(false)
+  advancedComplete     Boolean   @default(false)
+
+  // Obsidian Integration
+  obsidianFilePath  String?
+  obsidianSyncedAt  DateTime?
+
+  // Relations
+  resources         Resource[]
+  completions       Completion[]
+  reflections       Reflection[]
+  tags              TopicTag[]
+  concepts          TopicConcept[]
+  focusSessions     FocusSession[]
+  inspirations      TopicInspiration[] @relation("TopicInspirations")
+  inspiredTopics    TopicInspiration[] @relation("InspirationSource")
+
+  @@unique([userId, slug])
+  @@index([userId, status])
+  @@index([userId, temperature])
+  @@index([userId, gatewayComplete, gatewayDecidedAt])
+  @@index([lastActivityAt])
+}
+
+// ============================================
+// TOPIC CONNECTIONS (Network Model)
+// ============================================
+
+model TopicInspiration {
+  id                String   @id @default(cuid())
+  topicId           String
+  topic             Topic    @relation("TopicInspirations", fields: [topicId], references: [id], onDelete: Cascade)
+  inspiredByTopicId String?
+  inspiredByTopic   Topic?   @relation("InspirationSource", fields: [inspiredByTopicId], references: [id], onDelete: SetNull)
+
+  context           String?  @db.Text
+
+  createdAt         DateTime @default(now())
+
+  @@index([topicId])
+  @@index([inspiredByTopicId])
+}
+
+model Resource {
+  id                String       @id @default(cuid())
+  topicId           String
+  topic             Topic        @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Resource Info
+  title             String
+  type              ResourceType
+  tier              ResourceTier
+
+  // Metadata
+  author            String?
+  url               String?      @db.Text
+  pageCount         Int?
+  estimatedMinutes  Int?
+
+  // External IDs
+  goodreadsId       String?
+  isbn              String?
+
+  // Notes
+  description       String?      @db.Text
+  userNotes         String?      @db.Text
+
+  // Archive capability
+  archived          Boolean      @default(false)
+  archivedAt        DateTime?
+  archiveReason     String?
+
+  // Ordering within tier
+  orderIndex        Int          @default(0)
+
+  // Tracking
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  // Relations
+  completions       Completion[]
+
+  @@index([topicId, tier])
+  @@index([topicId, archived])
+  @@index([userId])
+}
+
+model Completion {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resourceId        String
+  resource          Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  topicId           String
+  topic             Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  completedAt       DateTime @default(now())
+  timeSpentMinutes  Int?
+
+  keyInsights       String?  @db.Text
+  rating            Int?
+
+  @@unique([userId, resourceId])
+  @@index([topicId])
+  @@index([userId, completedAt])
+}
+
+model Reflection {
+  id                 String         @id @default(cuid())
+  userId             String
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Optional topic association — reflections can be standalone
+  topicId            String?
+  topic              Topic?         @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  title              String
+  tier               ResourceTier?
+  content            String         @db.Text
+  synthesisAnswers   Json?
+  writingTimeSeconds Int            @default(0)
+
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  // Relations
+  tags               ReflectionTag[]
+  substackPosts      SubstackPost[]
+
+  @@index([topicId])
+  @@index([userId, createdAt])
+}
+
+model ReflectionTag {
+  reflectionId String
+  reflection   Reflection @relation(fields: [reflectionId], references: [id], onDelete: Cascade)
+  tagId        String
+  tag          Tag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([reflectionId, tagId])
+  @@index([tagId])
+}
+
+// ============================================
+// TAXONOMY
+// ============================================
+
+model Tag {
+  id       String    @id @default(cuid())
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name     String
+  color    String?
+
+  topics      TopicTag[]
+  reflections ReflectionTag[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model TopicTag {
+  topicId String
+  topic   Topic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  tagId   String
+  tag     Tag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([topicId, tagId])
+  @@index([tagId])
+}
+
+model Concept {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?        @db.Text
+
+  topics      TopicConcept[]
+
+  createdAt   DateTime       @default(now())
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model TopicConcept {
+  topicId   String
+  topic     Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  conceptId String
+  concept   Concept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+
+  notes     String? @db.Text
+
+  @@id([topicId, conceptId])
+  @@index([conceptId])
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id           String           @id @default(cuid())
+  userId       String
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type         NotificationType
+  topicId      String?
+
+  title        String
+  message      String           @db.Text
+  actionUrl    String?
+
+  sent         Boolean          @default(false)
+  sentAt       DateTime?
+  read         Boolean          @default(false)
+  readAt       DateTime?
+
+  scheduledFor DateTime
+  createdAt    DateTime         @default(now())
+
+  @@index([userId, sent, scheduledFor])
+  @@index([scheduledFor])
+}
+
+// ============================================
+// FOCUS SESSIONS
+// ============================================
+
+model FocusSession {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId         String?
+  topic           Topic?    @relation(fields: [topicId], references: [id], onDelete: SetNull)
+
+  promptText      String?   @db.Text
+  content         String    @db.Text
+  wordCount       Int
+  durationMinutes Int
+
+  discoveries     String?   @db.Text
+  questions       String?   @db.Text
+  connections     String?   @db.Text
+
+  syncedToObsidian Boolean  @default(false)
+  createdAt       DateTime  @default(now())
+
+  substackPosts   SubstackPost[]
+
+  @@index([userId, createdAt])
+  @@index([topicId])
+}
+
+// ============================================
+// PUBLISHING (V1.5)
+// ============================================
+
+model SubstackPost {
+  id              String         @id @default(cuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  focusSessionId  String?
+  focusSession    FocusSession?  @relation(fields: [focusSessionId], references: [id], onDelete: SetNull)
+  reflectionId    String?
+  reflection      Reflection?    @relation(fields: [reflectionId], references: [id], onDelete: SetNull)
+
+  substackId      String?
+  substackUrl     String?
+
+  title           String
+  subtitle        String?
+  content         String         @db.Text
+
+  aiAnalysis      Json?
+
+  status          PublishStatus  @default(DRAFT)
+  visibility      PostVisibility @default(PUBLIC)
+  publishedAt     DateTime?
+  scheduledFor    DateTime?
+
+  tags            String[]
+  viewCount       Int            @default(0)
+  lastSyncedAt    DateTime?
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([userId, status])
+  @@index([focusSessionId])
+  @@index([reflectionId])
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum NotificationFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  NEVER
+}
+
+enum Theme {
+  LIGHT
+  DARK
+  AUTO
+}
+
+enum TopicStatus {
+  ACTIVE
+  SATISFIED
+  DORMANT
+  ARCHIVED
+}
+
+enum Temperature {
+  HOT
+  WARM
+  COOL
+}
+
+enum ResourceType {
+  BOOK
+  ARTICLE
+  VIDEO
+  PODCAST
+  COURSE
+  WIKIPEDIA
+  DOCUMENTARY
+  PAPER
+  OTHER
+}
+
+enum ResourceTier {
+  GATEWAY
+  INTERMEDIATE
+  ADVANCED
+  REFERENCE
+}
+
+enum NotificationType {
+  GENTLE_REMINDER
+  GATEWAY_COMPLETE
+  SYNTHESIS_PROMPT
+  INTEREST_CHECK
+  BRANCHING_SUGGESTION
+  CELEBRATION
+}
+
+enum PublishStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+}
+
+enum PostVisibility {
+  PUBLIC
+  SUBSCRIBERS_ONLY
+  PAID_ONLY
+}
